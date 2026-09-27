@@ -5,6 +5,7 @@ USB mount cross-sections for CNC pykey40 case.
 1. YZ cut through USB mid-X — side view (pocket depth vs PCB/USB)
 2. XZ cut through USB pocket Y — front-ish view (pocket width vs PCB/USB)
 
+Stacked panels on A4; each cropped to the USB-pocket ROI.
 Same case solid as manufacturing port; PCB + USB preview solids overlaid.
 Orthographic: mirrored drawing solid; FRONT USB page-right.
 """
@@ -45,9 +46,13 @@ OUT_PNG = OUT_DIR / "cnc_pykey40_usb_sections_a4.png"
 PCB_THICKNESS = 1.6
 PCB_CORNER_R = 2.25
 USB_LIP_W = 11.0
-SCALE = 1.6
+SCALE = 3.6
 SLAB_T = 0.05
-MARGIN = 14.0
+MARGIN = 12.0
+# ROI half-extents around USB pocket (mm, case coords)
+ROI_Y_HALF = 22.0  # side view: depth into case from front
+ROI_X_HALF = 28.0  # front view: width around USB mid-X
+ROI_Z_PAD = 4.0
 
 
 def make_pcb(z_bottom: float) -> Part:
@@ -78,7 +83,6 @@ def main() -> None:
     z_pcb = CASE_BOTTOM_HEIGHT + CASE_LOWER_CAVITY_HEIGHT
     usb_case_x = pcb_xy[0] + PCB_USB_CONNECTOR_MID_X
     # Front-ish XZ cut: through USB pocket and PCB lip (case Y).
-    # Pocket is Y=0..CUTOUT_LENGTH; PCB lip sits near Y=pcb_xy[1].
     usb_cut_y = 5.0  # within pocket (0..7) and PCB lip (~3.9..7.9)
 
     case = make_cnc_pykey40_case(
@@ -90,27 +94,20 @@ def main() -> None:
     pcb = Pos(pcb_xy[0], pcb_xy[1], 0) * make_pcb(z_pcb)
     usb = Pos(pcb_xy[0], pcb_xy[1], 0) * make_usb_connector(z_pcb)
 
-    # --- YZ section at USB mid-X (side view of pocket) ---
-    yz_case = thin_slab_section(
-        case, center=(usb_case_x, ol / 2, oh / 2), size=(SLAB_T, ol + 40, oh + 20)
-    )
-    yz_pcb = thin_slab_section(
-        pcb, center=(usb_case_x, ol / 2, oh / 2), size=(SLAB_T, ol + 40, oh + 20)
-    )
-    yz_usb = thin_slab_section(
-        usb, center=(usb_case_x, ol / 2, oh / 2), size=(SLAB_T, ol + 40, oh + 20)
-    )
+    # --- YZ section at USB mid-X (side): crop Y around pocket, full Z ---
+    yz_cy = usb_cut_y  # pocket / lip region
+    yz_size = (SLAB_T, 2 * ROI_Y_HALF, oh + 2 * ROI_Z_PAD)
+    yz_center = (usb_case_x, yz_cy, oh / 2)
+    yz_case = thin_slab_section(case, center=yz_center, size=yz_size)
+    yz_pcb = thin_slab_section(pcb, center=yz_center, size=yz_size)
+    yz_usb = thin_slab_section(usb, center=yz_center, size=yz_size)
 
-    # --- XZ section at USB pocket Y (front-ish: pocket width) ---
-    xz_case = thin_slab_section(
-        case, center=(ow / 2, usb_cut_y, oh / 2), size=(ow + 40, SLAB_T, oh + 20)
-    )
-    xz_pcb = thin_slab_section(
-        pcb, center=(ow / 2, usb_cut_y, oh / 2), size=(ow + 40, SLAB_T, oh + 20)
-    )
-    xz_usb = thin_slab_section(
-        usb, center=(ow / 2, usb_cut_y, oh / 2), size=(ow + 40, SLAB_T, oh + 20)
-    )
+    # --- XZ section at USB pocket Y (front): crop X around mid-X, full Z ---
+    xz_size = (2 * ROI_X_HALF, SLAB_T, oh + 2 * ROI_Z_PAD)
+    xz_center = (usb_case_x, usb_cut_y, oh / 2)
+    xz_case = thin_slab_section(case, center=xz_center, size=xz_size)
+    xz_pcb = thin_slab_section(pcb, center=xz_center, size=xz_size)
+    xz_usb = thin_slab_section(usb, center=xz_center, size=xz_size)
 
     def center_all(p: Part) -> Part | None:
         if p is None or p.volume == 0:
@@ -128,7 +125,7 @@ def main() -> None:
         design_date=date.today(),
         page_size=PageSize.A4,
         title="CNC pykey40 USB mount",
-        sub_title="cross-sections",
+        sub_title="cross-sections (pocket ROI)",
         drawing_number="KL-CNC-PY40-USB",
         sheet_number=1,
         drawing_scale=1,
@@ -139,15 +136,15 @@ def main() -> None:
     title_bb = faces_by_area[1].bounding_box()
 
     # Cameras:
-    # Side (YZ cut): look from +X (cam +200,0,0) — after YZ mirror, USB toward front
-    # Front-ish (XZ cut): look from -Y (cam 0,-200,0) — USB page-right
+    # Side (YZ cut): look from +X — after YZ mirror, USB toward front
+    # Front-ish (XZ cut): look from -Y — USB page-right
     CAM_SIDE = ((200, 0, 0), (0, 0, 1))
     CAM_FRONT = ((0, -200, 0), (0, 0, 1))
 
     layers_side = [
         (n, c, s)
         for n, c, s in [
-            ("Case", (0x40, 0x40, 0x40), mirror_all(yz_case)),
+            ("Case", (0x20, 0x20, 0x20), mirror_all(yz_case)),
             ("PCB", (0xC0, 0x20, 0x20), mirror_all(yz_pcb)),
             ("USB", (0x40, 0x40, 0xA0), mirror_all(yz_usb)),
         ]
@@ -156,14 +153,13 @@ def main() -> None:
     layers_front = [
         (n, c, s)
         for n, c, s in [
-            ("CaseF", (0x40, 0x40, 0x40), mirror_all(xz_case)),
+            ("CaseF", (0x20, 0x20, 0x20), mirror_all(xz_case)),
             ("PCBF", (0xC0, 0x20, 0x20), mirror_all(xz_pcb)),
             ("USBF", (0x40, 0x40, 0xA0), mirror_all(xz_usb)),
         ]
         if s is not None
     ]
 
-    # Probe sizes
     def probe(layers, cam):
         edges = []
         for _n, _c, solid in layers:
@@ -173,62 +169,102 @@ def main() -> None:
 
     bb_s = probe(layers_side, CAM_SIDE)
     bb_f = probe(layers_front, CAM_FRONT)
+    if bb_s is None or bb_f is None:
+        raise RuntimeError("USB section probe produced empty geometry")
 
     usable_left = frame_bb.min.X + MARGIN
     usable_right = frame_bb.max.X - MARGIN
     usable_top = frame_bb.max.Y - MARGIN
-    usable_bot = max(frame_bb.min.Y + MARGIN, title_bb.max.Y + 10.0)
-    mid_x = (usable_left + usable_right) / 2.0
-    # Side panel left half; front panel right half
-    side_cx = usable_left + (mid_x - usable_left) / 2.0
-    front_cx = mid_x + (usable_right - mid_x) / 2.0
-    cy = (usable_top + usable_bot) / 2.0 + 8.0
+    usable_bot = max(frame_bb.min.Y + MARGIN, title_bb.max.Y + 8.0)
+    usable_h = usable_top - usable_bot
+    usable_w = usable_right - usable_left
+    mid_y = usable_bot + usable_h / 2.0
+    cx = (usable_left + usable_right) / 2.0
 
-    origin_side = (side_cx - bb_s.center().X, cy - bb_s.center().Y)
-    origin_front = (front_cx - bb_f.center().X, cy - bb_f.center().Y)
+    # Stacked panels: SIDE top half, FRONT bottom half
+    panel_gap = 6.0
+    side_top = usable_top - 2.0
+    side_bot = mid_y + panel_gap / 2.0
+    front_top = mid_y - panel_gap / 2.0
+    front_bot = usable_bot + 18.0  # room for legend
+
+    side_cy = (side_top + side_bot) / 2.0 - 4.0
+    front_cy = (front_top + front_bot) / 2.0 - 2.0
+
+    origin_side = (cx - bb_s.center().X, side_cy - bb_s.center().Y)
+    origin_front = (cx - bb_f.center().X, front_cy - bb_f.center().Y)
+
+    # Panel divider / frames
+    side_frame = Pos(cx, (side_top + side_bot) / 2.0) * Rectangle(
+        usable_w - 4, side_top - side_bot - 2
+    )
+    front_frame = Pos(cx, (front_top + front_bot) / 2.0) * Rectangle(
+        usable_w - 4, front_top - front_bot - 2
+    )
+    divider = Edge.make_line(
+        (usable_left + 2, mid_y, 0), (usable_right - 2, mid_y, 0)
+    )
 
     exporter = ExportSVG(unit=Unit.MM)
     labels: list = []
 
     for name, color, solid in layers_side:
-        exporter.add_layer(name, line_color=color, line_weight=0.25)
+        exporter.add_layer(name, line_color=color, line_weight=0.35)
         vis, _ = project_to_2d(solid, *CAM_SIDE, origin_side, SCALE)
         if vis:
             exporter.add_shape(list(vis), layer=name)
 
     for name, color, solid in layers_front:
-        exporter.add_layer(name, line_color=color, line_weight=0.25)
+        exporter.add_layer(name, line_color=color, line_weight=0.35)
         vis, _ = project_to_2d(solid, *CAM_FRONT, origin_front, SCALE)
         if vis:
             exporter.add_shape(list(vis), layer=name)
 
-    t1 = Text("Side — YZ @ USB mid-X", 3.5)
-    t1.position = Vector(side_cx - 35, usable_top - 4)
+    exporter.add_layer("Frames", line_color=(0x90, 0x90, 0x90), line_weight=0.30)
+    exporter.add_shape(list(side_frame.edges()) + list(front_frame.edges()) + [divider], layer="Frames")
+
+    t1 = Text("SIDE — YZ cut @ USB mid-X (pocket ROI)", 3.6)
+    t1.position = Vector(usable_left + 4, side_top - 6)
     labels.append(t1)
-    t1b = Text(f"X={usb_case_x:.2f} (case)", 2.6)
-    t1b.position = Vector(side_cx - 25, usable_top - 12)
+    t1b = Text(
+        f"cut X={usb_case_x:.2f} (case)  |  Y ROI ±{ROI_Y_HALF:.0f} around Y≈{yz_cy:.0f}",
+        2.5,
+    )
+    t1b.position = Vector(usable_left + 4, side_top - 13)
     labels.append(t1b)
 
-    t2 = Text("Front — XZ @ USB pocket Y", 3.5)
-    t2.position = Vector(front_cx - 40, usable_top - 4)
+    t2 = Text("FRONT — XZ cut @ USB pocket Y (pocket ROI)", 3.6)
+    t2.position = Vector(usable_left + 4, front_top - 6)
     labels.append(t2)
-    t2b = Text(f"Y={usb_cut_y:.2f}  pocket {USB_CONNECTOR_HOLE_WIDTH:.0f}×{USB_CONNECTOR_CUTOUT_LENGTH:.0f}", 2.6)
-    t2b.position = Vector(front_cx - 45, usable_top - 12)
+    t2b = Text(
+        f"cut Y={usb_cut_y:.2f}  |  X ROI ±{ROI_X_HALF:.0f} around USB mid-X  |  "
+        f"pocket {USB_CONNECTOR_HOLE_WIDTH:.0f}×{USB_CONNECTOR_CUTOUT_LENGTH:.0f}",
+        2.5,
+    )
+    t2b.position = Vector(usable_left + 4, front_top - 13)
     labels.append(t2b)
 
-    note = Text(
-        f"case black / PCB red / USB blue  |  PCB Z={z_pcb:.0f}  |  "
-        f"pocket H to {CASE_BOTTOM_HEIGHT + CASE_LOWER_CAVITY_HEIGHT + (USB_CONNECTOR_HOLE_HEIGHT/2 - USB_CONNECTOR_HEIGHT/2):.1f}",
-        2.4,
+    pocket_h_top = (
+        CASE_BOTTOM_HEIGHT
+        + CASE_LOWER_CAVITY_HEIGHT
+        + (USB_CONNECTOR_HOLE_HEIGHT / 2 - USB_CONNECTOR_HEIGHT / 2)
     )
-    note.position = Vector(usable_left, usable_bot + 2)
-    labels.append(note)
+    legend = Text(
+        f"Legend: case black / PCB red / USB blue    |    "
+        f"pocket {USB_CONNECTOR_HOLE_WIDTH:.0f}×{USB_CONNECTOR_CUTOUT_LENGTH:.0f}    |    "
+        f"PCB Z={z_pcb:.0f}    |    cut X={usb_case_x:.2f}  Y={usb_cut_y:.2f}    |    "
+        f"pocket H to {pocket_h_top:.1f}",
+        2.3,
+    )
+    legend.position = Vector(usable_left + 2, usable_bot + 8)
+    labels.append(legend)
 
     note2 = Text(
-        "USB page-right on front cut (mirrored solid). Side looks from +X.",
-        2.2,
+        "USB page-right on front cut (mirrored solid). Side looks from +X. "
+        f"Scale ≈{SCALE:.1f}× (cropped ROI).",
+        2.1,
     )
-    note2.position = Vector(usable_left, usable_bot - 6)
+    note2.position = Vector(usable_left + 2, usable_bot + 1)
     labels.append(note2)
 
     exporter.add_layer("Annotations", fill_color=(0, 0, 0), line_color=(0, 0, 0))

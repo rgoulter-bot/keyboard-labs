@@ -39,7 +39,7 @@ PCB_THICKNESS = 1.6
 PCB_CORNER_R = 2.25
 USB_LIP_W = 11.0  # connector 9 + extraW 2
 USB_LIP_H = 4.0
-SCALE = 0.85
+SCALE = 0.80
 CENTER_MARK_HALF = 2.0
 
 
@@ -55,6 +55,24 @@ def make_pcb_part() -> Part:
             with Locations((hx, hy, 0)):
                 Hole(1.1, depth=PCB_THICKNESS + 0.1)
     return bp.part
+
+
+def _dim_arrow_v(x: float, y_lo: float, y_hi: float, arrow_len: float, half_w: float):
+    """Vertical dim line + V-arrows between y_lo and y_hi at page X."""
+    edges = [Edge.make_line((x, y_lo, 0), (x, y_hi, 0))]
+    for y_end, s in ((y_lo, 1), (y_hi, -1)):
+        edges.append(Edge.make_line((x, y_end, 0), (x - half_w, y_end + s * arrow_len, 0)))
+        edges.append(Edge.make_line((x, y_end, 0), (x + half_w, y_end + s * arrow_len, 0)))
+    return edges
+
+
+def _dim_arrow_h(y: float, x_lo: float, x_hi: float, arrow_len: float, half_w: float):
+    """Horizontal dim line + V-arrows between x_lo and x_hi at page Y."""
+    edges = [Edge.make_line((x_lo, y, 0), (x_hi, y, 0))]
+    for x_end, s in ((x_lo, 1), (x_hi, -1)):
+        edges.append(Edge.make_line((x_end, y, 0), (x_end + s * arrow_len, y - half_w, 0)))
+        edges.append(Edge.make_line((x_end, y, 0), (x_end + s * arrow_len, y + half_w, 0)))
+    return edges
 
 
 def main() -> None:
@@ -82,7 +100,8 @@ def main() -> None:
         nominal_text_size=4.0,
     )
     page = border.bounding_box().size
-    page_origin = (page.X * -0.02, page.Y * 0.10)
+    # Shift geometry slightly up to leave room for hole-chain + overall below.
+    page_origin = (page.X * -0.02, page.Y * 0.14)
 
     drafting = Draft(
         font_size=3.2,
@@ -118,116 +137,116 @@ def main() -> None:
     front_y, back_y = bb.max.Y, bb.min.Y
 
     peri = Pos(*bb.center()) * Rectangle(bb.size.X, bb.size.Y)
+
+    # --- Overall dims on OUTER rails (large offsets, clear of hole chains) ---
     annotations.append(
         ExtensionLine(
-            border=peri.edges().sort_by(Axis.Y)[0],
-            offset=12 * MM,
+            border=peri.edges().sort_by(Axis.Y)[0],  # page-bottom = PCB back
+            offset=24 * MM,
             draft=drafting,
             label=f"{w:.0f}",
         )
     )
     annotations.append(
         ExtensionLine(
-            border=peri.edges().sort_by(Axis.X)[-1],
-            offset=12 * MM,
+            border=peri.edges().sort_by(Axis.X)[-1],  # page-right
+            offset=22 * MM,
             draft=drafting,
             label=f"{l:.0f}",
         )
     )
 
+    gap = drafting.extension_gap
+    arrow_len = drafting.arrow_length
+    arrow_half_w = arrow_len / 3.0
+
+    # --- Horizontal hole chain BELOW PCB, above overall-width rail ---
     # Page L→R = phys left→right (USB / SW_1_1 on LHS).
     hpx = [mx(x) for x in xs]
     hpy = [my(y) for y in ys]
     hpx_sorted = sorted(hpx)
     pcb_page_left = mx(0)
-    feat_y = hpy[0]
-    x_offset = -((front_y - feat_y) + 10.0) * MM
-    edge_and_holes = sorted([pcb_page_left] + hpx_sorted)
+    pcb_page_right = mx(w)
+    edge_and_holes_x = [pcb_page_left] + hpx_sorted + [pcb_page_right]
     vals_ltr = [xs[0] - 0.0, xs[1] - xs[0], xs[2] - xs[1], w - xs[2]]
+    chain_y = back_y - 10.0  # between PCB and overall (overall ~ back_y-22)
     for (xa, xb), val in zip(
-        zip(edge_and_holes[:-1], edge_and_holes[1:]), vals_ltr
+        zip(edge_and_holes_x[:-1], edge_and_holes_x[1:]), vals_ltr
     ):
-        annotations.append(
-            ExtensionLine(
-                border=[(xa, feat_y, 0), (xb, feat_y, 0)],
-                offset=x_offset,
-                draft=drafting,
-                label=f"{val:.2f}",
-            )
-        )
+        x_lo, x_hi = (xa, xb) if xa < xb else (xb, xa)
+        # Extension ticks from PCB back edge down to chain rail
+        dim_edges.append(Edge.make_line((xa, back_y - gap, 0), (xa, chain_y + gap, 0)))
+        dim_edges.append(Edge.make_line((xb, back_y - gap, 0), (xb, chain_y + gap, 0)))
+        dim_edges.extend(_dim_arrow_h(chain_y, x_lo, x_hi, arrow_len, arrow_half_w))
+        mid_x = (xa + xb) / 2
+        lbl = Text(f"{val:.2f}", 3.0)
+        lbl.position = Vector(mid_x, chain_y - 5.5)
+        labels.append(lbl)
 
+    # --- Vertical hole chain on LEFT with clear gap; text outside arrows ---
     feat_x = hpx_sorted[0]
-    y_dim_x = feat_x - 22.0
+    y_dim_x = feat_x - 34.0
     front_edge_y = my(0)
     y_segs = [
         (hpy[2], hpy[1], ys[2] - ys[1]),
         (hpy[1], hpy[0], ys[1] - ys[0]),
         (hpy[0], front_edge_y, ys[0] - 0.0),
     ]
-    gap = drafting.extension_gap
-    arrow_len = drafting.arrow_length
-    arrow_half_w = arrow_len / 3.0
     for y_a, y_b, val in y_segs:
         y_lo, y_hi = (y_a, y_b) if y_a < y_b else (y_b, y_a)
-        dim_edges.append(Edge.make_line((feat_x - gap, y_a, 0), (y_dim_x - gap, y_a, 0)))
-        dim_edges.append(Edge.make_line((feat_x - gap, y_b, 0), (y_dim_x - gap, y_b, 0)))
-        dim_edges.append(Edge.make_line((y_dim_x, y_lo, 0), (y_dim_x, y_hi, 0)))
-        for y_end, s in ((y_lo, 1), (y_hi, -1)):
-            dim_edges.append(
-                Edge.make_line(
-                    (y_dim_x, y_end, 0),
-                    (y_dim_x - arrow_half_w, y_end + s * arrow_len, 0),
-                )
-            )
-            dim_edges.append(
-                Edge.make_line(
-                    (y_dim_x, y_end, 0),
-                    (y_dim_x + arrow_half_w, y_end + s * arrow_len, 0),
-                )
-            )
+        dim_edges.append(Edge.make_line((feat_x - gap, y_a, 0), (y_dim_x + gap, y_a, 0)))
+        dim_edges.append(Edge.make_line((feat_x - gap, y_b, 0), (y_dim_x + gap, y_b, 0)))
+        dim_edges.extend(_dim_arrow_v(y_dim_x, y_lo, y_hi, arrow_len, arrow_half_w))
         mid_y = (y_a + y_b) / 2
-        lbl = Text(f"{val:.2f}", 3.5)
-        lbl.position = Vector(y_dim_x - 9.0, mid_y)
+        lbl = Text(f"{val:.2f}", 3.2)
+        lbl.position = Vector(y_dim_x - 14.0, mid_y)
         labels.append(lbl)
 
+    # SW_1_1 near its mark (clear of USB callout block)
     sw_lbl = Text(
         f"SW_1_1 ({PCB_SW_1_1_POSITION[0]:.1f}, {PCB_SW_1_1_POSITION[1]:.1f})",
-        3.0,
+        2.8,
     )
-    sw_lbl.position = Vector(mx(sw11[0]) + 4, my(sw11[1]) + 6)
+    # Place to the RIGHT of the mark so it clears the left vertical hole-chain.
+    sw_lbl.position = Vector(mx(sw11[0]) + 10, my(sw11[1]) + 5)
     labels.append(sw_lbl)
 
+    # USB callout block ABOVE geometry (single clear corner, no dim collision)
+    usb_block_x = page_origin[0] - 5
+    usb_block_y = front_y + 20
+    usb_hdr = Text("USB callout (PCB-local)", 2.6)
+    usb_hdr.position = Vector(usb_block_x, usb_block_y + 7)
+    labels.append(usb_hdr)
     usb_lbl = Text(
-        f"USB mid-X {PCB_USB_CONNECTOR_MID_X:.3f}  "
+        f"mid-X {PCB_USB_CONNECTOR_MID_X:.3f}  "
         f"(= SW_1_1.x + 1.5×{SWITCH_GRID_UNIT})",
-        3.0,
+        2.8,
     )
-    usb_lbl.position = Vector(mx(usb_x) - 35, front_y + 18)
+    usb_lbl.position = Vector(usb_block_x, usb_block_y)
     labels.append(usb_lbl)
-
-    lip_lbl = Text(f"USB lip {USB_LIP_W:.0f}×{USB_LIP_H:.0f} (y=−2..+2)", 2.8)
-    lip_lbl.position = Vector(mx(usb_x) - 20, front_y + 10)
+    lip_lbl = Text(f"lip {USB_LIP_W:.0f}×{USB_LIP_H:.0f} (y=−2..+2 at mid-X)", 2.6)
+    lip_lbl.position = Vector(usb_block_x, usb_block_y - 7)
     labels.append(lip_lbl)
 
     title = Text("Top — PCB outline (USB top-left)", 4.0)
-    title.position = Vector(page_origin[0], front_y + 28)
+    title.position = Vector(page_origin[0] + 55, front_y + 20)
     labels.append(title)
 
     note = Text(
         f"PCB {w:.0f}×{l:.0f}×{PCB_THICKNESS}  |  5× mount ⌀2.2  |  "
         f"mounts from SW_1_1 + grid offsets",
-        2.8,
+        2.6,
     )
-    note.position = Vector(page_origin[0], back_y - 16)
+    note.position = Vector(page_origin[0], back_y - 36)
     labels.append(note)
 
     d = derived_dims()
     note2 = Text(
         f"case_pcb_position {tuple(round(v, 3) for v in d['case_pcb_position'])} "
         f"(placement in case; this sheet is PCB-local)",
-        2.4,
+        2.3,
     )
-    note2.position = Vector(page_origin[0], back_y - 24)
+    note2.position = Vector(page_origin[0], back_y - 43)
     labels.append(note2)
 
     exporter = ExportSVG(unit=Unit.MM)

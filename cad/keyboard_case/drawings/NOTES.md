@@ -56,3 +56,15 @@ PNG via `rsvg-convert` (or `nix shell nixpkgs#librsvg -c rsvg-convert …`).
 | `case_full_drawing.py` | `cnc_pykey40_full_a3.*` | Full multi-view mfg |
 | `case_plate_fit_drawing.py` | `cnc_pykey40_plate_fit.*` | Plate-in-cavity fit |
 | `case_pcb_overlay.py` | `cnc_pykey40_pcb_overlay_*.*` | Case+PCB+plate overlay |
+
+## Layout notes (confidence sheets)
+
+- **PCB dims** (`case_pcb_drawing.py`): overall W/H on outer rails (large offsets);
+  horizontal mount-hole chain on a separate rail *below* the PCB; vertical chain
+  on the left with text outside arrows; USB mid-X / lip as one callout block
+  *above* the geometry (never on dim lines).
+- **Z-slices** (`case_z_slices_drawing.py`): PCB outline in red at
+  `case_pcb_position` (mid-thickness slab) on every panel; USB-notch detail
+  insets on bottom/lower panels.
+- **USB sections** (`case_usb_section_drawing.py`): stacked SIDE (top) / FRONT
+  (bottom) panels; each cut cropped to USB-pocket ROI (not full case extent).
