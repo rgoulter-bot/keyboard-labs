@@ -50,6 +50,8 @@ PCB_THICKNESS = 1.6
 PCB_CORNER_R = 2.25
 USB_LIP_W = 11.0
 USB_LIP_H = 4.0
+# Room above first panel for multi-line legend
+LEGEND_BAND = 16.0
 
 
 def make_pcb(z_bottom: float) -> Part:
@@ -120,12 +122,14 @@ def main() -> None:
     labels: list = []
     frames: list = []
 
-    # Layout: three panels stacked; bias left so USB notch has room + detail insets right
+    # Layout: legend band under top border, then three stacked panels
     usable_top = frame_bb.max.Y - MARGIN
     usable_bot = max(frame_bb.min.Y + MARGIN, title_bb.max.Y + 10.0)
     usable_left = frame_bb.min.X + MARGIN
     usable_right = frame_bb.max.X - MARGIN
-    panel_h = (usable_top - usable_bot) / 3.0
+    # Panels start below the legend band
+    panels_top = usable_top - LEGEND_BAND
+    panel_h = (panels_top - usable_bot) / 3.0
     # Main view center biased left; leave ~95 mm on right for USB detail insets
     main_right = usable_right - 95.0
     cx = usable_left + (main_right - usable_left) * 0.48
@@ -137,6 +141,27 @@ def main() -> None:
     # Shared PCB drawing solid (centered at PCB mid-Z so top projection matches case)
     pcb_draw = center_mirror(pcb_slab, z_pcb_mid)
 
+    # Legend ABOVE panels, left-aligned with main panel column (not sheet edge)
+    holes = mount_hole_positions_case()
+    legend_lines = [
+        f"Top views of horizontal sections (USB top-left). Outer {ow:.0f}×{ol:.0f}×{oh:.0f}.",
+        f"Red = PCB outline (case placement). Thin-slab ±{SLAB_T/2:.3f} mm.",
+        f"Mount posts at Z={z_lower:.1f}: {len(holes)}× ⌀6. Detail insets: USB notch @ {DETAIL_SCALE:.2f}×.",
+    ]
+    # Probe main view width so legend shares the panel column X
+    _probe = thin_slab_section(
+        case, center=(ow / 2, ol / 2, z_bottom), size=(ow + 20, ol + 20, SLAB_T)
+    )
+    _probe_draw = center_mirror(_probe, z_bottom)
+    _pvis, _ = project_to_2d(_probe_draw, (0, 0, 200), (0, -1, 0), (0, 0), SCALE)
+    _pbb = Curve(_pvis).bounding_box()
+    legend_x = cx - _pbb.size.X / 2.0
+    legend_y0 = usable_top - 3.5
+    for i, line in enumerate(legend_lines):
+        t = Text(line, 2.8, align=(Align.MIN, Align.MIN))
+        t.position = Vector(legend_x, legend_y0 - i * 4.2)
+        labels.append(t)
+
     for i, (name, z_cut, note) in enumerate(slices):
         sec = thin_slab_section(
             case,
@@ -147,7 +172,7 @@ def main() -> None:
 
         vis0, _ = project_to_2d(draw, (0, 0, 200), (0, -1, 0), (0, 0), SCALE)
         bb0 = Curve(vis0).bounding_box()
-        panel_top = usable_top - i * panel_h
+        panel_top = panels_top - i * panel_h
         panel_bot = panel_top - panel_h
         panel_cy = (panel_top + panel_bot) / 2.0 - 2.0
         # Slight downward bias so title sits above; USB notch toward panel top-left
@@ -161,23 +186,16 @@ def main() -> None:
         pcb_edges.extend(pvis)
 
         bb = Curve(vis).bounding_box()
-        t1 = Text(f"{name} — {note}", 3.4)
+        t1 = Text(f"{name} — {note}", 3.4, align=(Align.MIN, Align.MIN))
         t1.position = Vector(bb.min.X, bb.max.Y + 5)
         labels.append(t1)
 
         # USB-notch detail inset (right of main panel) — bottom + lower only
         if i < 2:
-            # Physical USB notch region in case coords (front-left after mirror)
-            # Crop via look_at / origin shift of a zoomed projection of same solids
             dvis0, _ = project_to_2d(draw, (0, 0, 200), (0, -1, 0), (0, 0), DETAIL_SCALE)
             dbb0 = Curve(dvis0).bounding_box()
-            # USB is top-left of mirrored geometry → max Y, min X of projected bbox
-            # Place detail so that USB corner sits in inset center-left
             detail_cx = main_right + 42.0
             detail_cy = panel_cy + 4.0
-            # Offset so the top-left of the full projection lands near detail center
-            # Focus: shift origin so physical (usb_case_x region, y≈0) is centered
-            # Approximated via projected bbox corner
             usb_focus_x = dbb0.min.X + dbb0.size.X * 0.18
             usb_focus_y = dbb0.max.Y - dbb0.size.Y * 0.12
             d_origin = (detail_cx - usb_focus_x, detail_cy - usb_focus_y)
@@ -186,11 +204,10 @@ def main() -> None:
                 pcb_draw, (0, 0, 200), (0, -1, 0), d_origin, DETAIL_SCALE
             )
 
-            # Clip-ish frame around the inset (visual crop rectangle)
             inset_w, inset_h = 78.0, 42.0
             frame = Pos(detail_cx, detail_cy) * Rectangle(inset_w, inset_h)
             frames.append(frame)
-            # Keep only edges that roughly fall inside the frame by filtering bbox center
+
             def in_inset(edges):
                 kept = []
                 for e in edges:
@@ -205,27 +222,9 @@ def main() -> None:
             detail_case.extend(in_inset(dvis))
             detail_pcb.extend(in_inset(dpvis))
 
-            dt = Text("USB notch detail", 2.4)
+            dt = Text("USB notch detail", 2.4, align=(Align.MIN, Align.MIN))
             dt.position = Vector(detail_cx - 28, detail_cy + inset_h / 2 + 3)
             labels.append(dt)
-
-    legend = Text(
-        "Top views of horizontal sections (USB top-left). "
-        f"Outer {ow:.0f}×{ol:.0f}×{oh:.0f}. Thin-slab ±{SLAB_T/2:.3f} mm. "
-        "PCB outline red (at case_pcb_position; mid-Z slab).",
-        2.6,
-    )
-    legend.position = Vector(usable_left, usable_bot + 6)
-    labels.append(legend)
-
-    holes = mount_hole_positions_case()
-    n_posts = Text(
-        f"Mount posts at Z={z_lower:.1f}: {len(holes)}× ⌀6 (pilots omitted). "
-        f"PCB Z={z_pcb:.0f}..{z_pcb + PCB_THICKNESS:.1f}.",
-        2.3,
-    )
-    n_posts.position = Vector(usable_left, usable_bot - 2)
-    labels.append(n_posts)
 
     exporter = ExportSVG(unit=Unit.MM)
     exporter.add_layer("Visible", line_weight=0.35)
